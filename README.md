@@ -7,6 +7,11 @@
 
 An [MCP](https://modelcontextprotocol.io) server that exposes a mobile-manipulation robot's perception primitives — segmentation, grasp planning, drop-pose planning, and raw camera access — as tools an LLM agent can call.
 
+
+
+https://github.com/user-attachments/assets/a2e26385-8f25-4c78-b2b7-41480a1236a6
+
+
 It is the perception layer in a larger stack where an LLM-driven agent uses MCP tools to drive a real (or simulated) robot through pick / place / navigate tasks. Other layers in the stack (exposed as separate MCP servers) typically handle motion planning (MoveIt), navigation (nav2), and direct ROS topic access.
 
 ## What problem this solves
