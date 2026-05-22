@@ -35,11 +35,12 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 include-package-data = true
-packages = [
-    "perception_mcp",
-    "perception_mcp.tools",
-    "perception_mcp.utils",
-]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
 
 [tool.ruff]
 line-length = 100

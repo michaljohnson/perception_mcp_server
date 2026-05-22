@@ -1,0 +1,33 @@
+# Build hygiene — keep the Docker context small.
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Local dev files
+.env
+.env.local
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Git
+.git/
+.gitignore
+
+# Docs and examples are not needed for the image
+docs/
+examples/
+tests/
+
+# uv lockfile is used during build, but the venv it produces is not
+uv.lock

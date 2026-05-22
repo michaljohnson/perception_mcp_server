@@ -250,19 +250,46 @@ Not appropriate for grasp / place planning — use `segment_objects` plus `get_t
 
 ```
 perception-mcp-server/
-├── server.py                       # entry point; CLI args + transport
+├── server.py                       Entry point; CLI args + transport.
 ├── pyproject.toml
-├── perception_mcp/
-│   ├── main.py                     # tool registration + health checks
+├── Dockerfile                      Container image (CPU-only).
+├── src/perception_mcp/
+│   ├── main.py                     Tool registration + health checks.
 │   ├── tools/
-│   │   ├── segmentation.py         # segment_objects
-│   │   ├── grasping.py             # get_topdown_grasp_pose
-│   │   ├── placing.py              # get_topdown_placing_pose
-│   │   └── detection.py            # look
+│   │   ├── segmentation.py         segment_objects
+│   │   ├── grasping.py             get_topdown_grasp_pose
+│   │   ├── placing.py              get_topdown_placing_pose
+│   │   └── detection.py            look
 │   └── utils/
-│       ├── websocket.py            # rosbridge / TF2 / topic I/O
-│       └── transforms.py           # TOP_DOWN_ORIENTATION + TF helpers
+│       ├── websocket.py            rosbridge / TF2 / topic I/O
+│       └── transforms.py           TOP_DOWN_ORIENTATION + TF helpers
+├── docs/
+│   ├── ARCHITECTURE.md             Internal modules and data flow.
+│   └── TROUBLESHOOTING.md          Common failure modes + fixes.
+├── examples/
+│   └── test_client.py              Standalone MCP client that runs a
+│                                   segment -> grasp -> place sequence.
+└── tests/                          pytest suite (transforms + tools).
 ```
+
+## Docker
+
+A minimal Dockerfile is provided for CPU-only deployments. The server
+itself does not include a GPU model; the segmentation backend (which
+does) runs as a separate HTTP service that this container connects to.
+
+```bash
+docker build -t perception-mcp-server:latest .
+
+docker run --rm -p 8003:8003 \
+    -e ROSBRIDGE_IP=host.docker.internal \
+    -e ROSBRIDGE_PORT=9090 \
+    -e SAM3_REMOTE_URL=http://your-sam3-host:8001 \
+    perception-mcp-server:latest
+```
+
+On Linux hosts where `host.docker.internal` does not resolve, either
+use `--network host` or pass the host IP explicitly as `ROSBRIDGE_IP`.
 
 ## Limitations
 
