@@ -1,9 +1,12 @@
 # perception-mcp-server
 
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
-![Python](https://img.shields.io/badge/python-3.10%2B-blue)
-![ROS 2](https://img.shields.io/badge/ROS%202-Jazzy-22314e)
-![MCP](https://img.shields.io/badge/MCP-server-orange)
+![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
+![ROS 2](https://img.shields.io/badge/ROS%202-Jazzy-22314e?logo=ros)
+![FastMCP](https://img.shields.io/badge/FastMCP-MCP%20Server-orange)
+![rosbridge](https://img.shields.io/badge/rosbridge-WebSocket-22314e)
+![SAM 3](https://img.shields.io/badge/SAM--3-Segmentation-red)
+![GroundingDINO](https://img.shields.io/badge/GroundingDINO-Detection-9d2c2c)
 ![Last commit](https://img.shields.io/github/last-commit/michaljohnson/perception_mcp_server)
 
 An [MCP](https://modelcontextprotocol.io) server that exposes a mobile-manipulation robot's perception primitives — text-prompted segmentation, top-down grasp planning, top-down place planning, and raw camera access — as tools an LLM agent can call.
