@@ -272,4 +272,8 @@ perception-mcp-server/
 
 ## License
 
-Licensed under the [Apache License 2.0](LICENSE).
+See [LICENSE](LICENSE) for details.
+
+## Contributing
+
+Contributions welcome — please open an issue or PR on GitHub.
