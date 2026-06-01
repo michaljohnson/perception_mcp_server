@@ -103,6 +103,7 @@ def register_placing_tools(
         top_clearance_m: float = 0.20,
         object_height_m: float = 0.0,
         x_bias_m: float = 0.0,
+        near_edge_inset_m: float = 0.0,
         pointcloud_topic: str = "/segmented_pointcloud",
         use_cached: bool = True,
         crop_center_x: float = None,
@@ -131,6 +132,17 @@ def register_placing_tools(
                 the place pose deeper into the table for safer central
                 placement. Default 0.0 = no bias (container mode and
                 stage-2 arm-cam refine both have less centroid bias).
+                Ignored when `near_edge_inset_m > 0` (near-edge mode
+                replaces the mean-x target entirely).
+            near_edge_inset_m: When > 0, place at the NEAR EDGE of the
+                point cloud bbox plus this inset, instead of at the
+                cloud's mean x. Used for wide surfaces (coffee tables,
+                desks) where the geometric centroid sits inside the
+                volume and would put the wrist beyond UR5e reach even
+                when the robot is pressed against the near edge. Typical
+                value: 0.10 (places ~10cm into the table from the front
+                rim). Only applied in SURFACE mode (object_height_m>0).
+                Default 0.0 = mean-x centroid (legacy behavior).
             pointcloud_topic: Topic to read if use_cached=False or cache
                 empty. Default `/segmented_pointcloud` (SAM3 output).
                 Use `/arm_camera/points` for raw arm depth or
@@ -236,7 +248,22 @@ def register_placing_tools(
 
         cx_raw = round(float(points_base[:, 0].mean()), 4)
         cy = round(float(points_base[:, 1].mean()), 4)
-        cx = round(cx_raw + x_bias_m, 4)
+        bbox_extents = {
+            "x_min": round(float(points_base[:, 0].min()), 4),
+            "x_max": round(float(points_base[:, 0].max()), 4),
+            "y_min": round(float(points_base[:, 1].min()), 4),
+            "y_max": round(float(points_base[:, 1].max()), 4),
+            "z_min": round(float(points_base[:, 2].min()), 4),
+            "z_max": round(float(points_base[:, 2].max()), 4),
+        }
+
+        # near-edge mode (wide surfaces only): wrist target at bbox.x_min + inset
+        # instead of the mean-x centroid. Only meaningful in surface mode.
+        use_near_edge = near_edge_inset_m > 0 and object_height_m > 0
+        if use_near_edge:
+            cx = round(bbox_extents["x_min"] + near_edge_inset_m, 4)
+        else:
+            cx = round(cx_raw + x_bias_m, 4)
         top_z = round(float(np.percentile(points_base[:, 2], 95)), 4)
 
         if object_height_m > 0:
@@ -278,13 +305,15 @@ def register_placing_tools(
             "surface_height_m": top_z,
             "surface_centroid": {"x": cx, "y": cy, "z": top_z},
             "centroid_raw": {"x": cx_raw, "y": cy},
+            "bbox_extents": bbox_extents,
             "place_pose": place_pose,
             "top_clearance_m": top_clearance_m,
             "object_height_m": object_height_m,
             "x_bias_m": x_bias_m,
+            "near_edge_inset_m": near_edge_inset_m,
             "gripper_finger_length_m": _GRIPPER_FINGER_LENGTH,
             "mode": mode,
-            "method": "mean_xy_p95_z",
+            "method": "near_edge_xy_p95_z" if use_near_edge else "mean_xy_p95_z",
             "num_points_used": len(points_base),
             "num_points_pre_crop": num_points_pre_crop,
             "crop_applied": crop_applied,

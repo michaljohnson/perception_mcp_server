@@ -147,6 +147,26 @@ def register_grasping_tools(
             # ACROSS the object's short axis, the gripper yaw therefore
             # equals the SHORT-axis angle = angle_long + pi/2.
             points_base = _transform_points(points, translation, rotation)
+
+            # Base-frame bounding box. Approach needs this for wide-surface
+            # targets where the centroid sits inside the object volume and
+            # would put the standoff point past the near edge (e.g. coffee
+            # table seen from the living-room entry). Camera-frame bbox
+            # above is kept for back-compat but x/y/z axes there are
+            # whichever the sensor publishes; this base-frame bbox is in
+            # the conventional robot frame (x forward, y left, z up).
+            # Computed in an inner try so that a bbox-only failure cannot
+            # take down the main return path (the main except resets
+            # centroid_base_frame to None which is a hard handoff break).
+            bbox_base = {
+                "x_min": round(float(points_base[:, 0].min()), 4),
+                "x_max": round(float(points_base[:, 0].max()), 4),
+                "y_min": round(float(points_base[:, 1].min()), 4),
+                "y_max": round(float(points_base[:, 1].max()), 4),
+                "z_min": round(float(points_base[:, 2].min()), 4),
+                "z_max": round(float(points_base[:, 2].max()), 4),
+            }
+
             angle_long, aspect_ratio = _principal_axis_angle_xy(points_base)
             if aspect_ratio >= _PCA_ASPECT_RATIO_MIN:
                 grasp_yaw = _shortest_grasp_yaw(angle_long + math.pi / 2)
@@ -174,6 +194,7 @@ def register_grasping_tools(
                 "centroid_base_frame": centroid_base,
                 "grasp_pose": grasp_pose,
                 "bounding_box": bounding_box,
+                "bbox_base_frame": bbox_base,
                 "num_points": len(points),
                 "camera_frame_id": frame_id,
                 "gripper_offset_m": GRIPPER_FINGER_OFFSET_M,
