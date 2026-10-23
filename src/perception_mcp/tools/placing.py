@@ -169,6 +169,14 @@ def register_placing_tools(
             points = segmentation_cache["points"]
             frame_id = segmentation_cache["frame_id"]
             used_cache = True
+        elif use_cached and pointcloud_topic.endswith("segmented_pointcloud"):
+            # Latched: reading it would return an earlier segmentation's cloud.
+            return {
+                "error": (
+                    "No segmentation result cached: the last segment_objects() "
+                    "call failed or none ran. Call segment_objects() first."
+                )
+            }
         else:
             try:
                 points, _, frame_id = ws_manager.get_pointcloud(

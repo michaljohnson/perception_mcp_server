@@ -78,6 +78,14 @@ def register_grasping_tools(
         if segmentation_cache.get("points") is not None:
             points = segmentation_cache["points"]
             frame_id = segmentation_cache["frame_id"]
+        elif pointcloud_topic.endswith("segmented_pointcloud"):
+            # Latched: reading it would return an earlier segmentation's cloud.
+            return {
+                "error": (
+                    "No segmentation result cached: the last segment_objects() "
+                    "call failed or none ran. Call segment_objects() first."
+                )
+            }
         else:
             try:
                 points, _, frame_id = ws_manager.get_pointcloud(

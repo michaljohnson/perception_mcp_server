@@ -19,6 +19,7 @@ import time
 import threading
 import uuid
 
+import websocket
 from fastmcp import FastMCP
 
 from perception_mcp.utils.websocket import WebSocketManager
@@ -72,6 +73,10 @@ def register_segmentation_tools(
         Returns:
             dict with segmentation status and cached point cloud info.
         """
+        # A failed run must not leave the previous result for the grasp and
+        # place tools.
+        segmentation_cache.clear()
+
         camera = (camera or "arm").lower()
         if camera == "arm":
             topic_prefix = ""
@@ -174,92 +179,126 @@ def register_segmentation_tools(
         pc_thread = threading.Thread(target=_capture_pointcloud, daemon=True)
         pc_thread.start()
 
-        # Wait for capture thread to finish draining latched messages before
-        # publishing the prompt. Without this, the prompt could trigger SAM3
-        # to publish a new pointcloud BEFORE the capture thread has subscribed
-        # and recorded the stale baseline.
-        ready_event.wait(timeout=2.0)
-
-        # Publish the text prompt to the selected camera's /segment_text
+        # /segmentation_status is latched as well: a new subscriber first gets
+        # the previous run's status. Listen on an own connection opened before
+        # the prompt, drop that replay, and take SUCCESS / NO_OBJECTS_FOUND only
+        # after this run's SEGMENTING (except 'ERROR: No image', which the node
+        # sends before it).
         try:
-            ws = ws_manager._ensure_connected()
-            pub_msg = {
-                "op": "publish",
-                "topic": text_topic,
+            status_ws = websocket.create_connection(ws_manager.url, timeout=timeout)
+            status_ws.send(json.dumps({
+                "op": "subscribe",
+                "id": f"status:{uuid.uuid4().hex[:8]}",
+                "topic": status_topic,
                 "type": "std_msgs/msg/String",
-                "msg": {"data": prompt},
-            }
-            ws.send(json.dumps(pub_msg))
+            }))
+            status_ws.settimeout(0.25)
+            try:
+                while True:
+                    status_ws.recv()
+            except (websocket.WebSocketTimeoutException, OSError, TimeoutError):
+                pass
         except Exception as e:
-            return {"error": f"Failed to publish prompt: {str(e)}"}
+            return {"error": f"Failed to subscribe to {status_topic}: {str(e)}"}
 
-        # Wait for a terminal status (skip intermediate SEGMENTING messages).
         try:
+            # Wait for capture thread to finish draining latched messages before
+            # publishing the prompt. Without this, the prompt could trigger SAM3
+            # to publish a new pointcloud BEFORE the capture thread has subscribed
+            # and recorded the stale baseline.
+            ready_event.wait(timeout=2.0)
+
+            # Publish the text prompt to the selected camera's /segment_text
+            try:
+                ws = ws_manager._ensure_connected()
+                pub_msg = {
+                    "op": "publish",
+                    "topic": text_topic,
+                    "type": "std_msgs/msg/String",
+                    "msg": {"data": prompt},
+                }
+                ws.send(json.dumps(pub_msg))
+            except Exception as e:
+                return {"error": f"Failed to publish prompt: {str(e)}"}
+
             deadline = time.monotonic() + timeout
-            status = "SEGMENTING"
-            while status == "SEGMENTING":
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError("Timed out waiting for segmentation result")
-                status_msg = ws_manager.subscribe_once(
-                    status_topic,
-                    msg_type="std_msgs/msg/String",
-                    timeout=remaining,
-                )
-                status = status_msg.get("data", "UNKNOWN")
-        except TimeoutError:
-            return {
-                "error": (
-                    f"Timeout ({timeout}s) waiting for segmentation result on "
-                    f"{status_topic}. Is the {camera}-camera segmentation node "
-                    f"running? Check start_ros_stack.sh logs."
-                )
-            }
-        except Exception as e:
-            return {"error": f"Failed to get status: {str(e)}"}
+            seen_segmenting = False
+            status = None
+            try:
+                while status is None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("Timed out waiting for segmentation result")
+                    status_ws.settimeout(remaining)
+                    data = json.loads(status_ws.recv())
+                    if data.get("topic") != status_topic:
+                        continue
+                    value = data.get("msg", {}).get("data", "UNKNOWN")
+                    if value == "SEGMENTING":
+                        seen_segmenting = True
+                    elif seen_segmenting or value == "ERROR: No image":
+                        status = value
+            except (TimeoutError, websocket.WebSocketTimeoutException):
+                return {
+                    "error": (
+                        f"Timeout ({timeout}s) waiting for segmentation result on "
+                        f"{status_topic}. Is the {camera}-camera segmentation node "
+                        f"running? Check start_ros_stack.sh logs."
+                    )
+                }
+            except Exception as e:
+                return {"error": f"Failed to get status: {str(e)}"}
+        finally:
+            status_ws.close()
 
         if status == "SUCCESS":
             # Wait for the pointcloud capture thread to finish
             pc_thread.join(timeout=10.0)
 
-            if pc_result["data"] is not None:
-                points, colors, frame_id = pc_result["data"]
-                segmentation_cache["points"] = points
-                segmentation_cache["colors"] = colors
-                segmentation_cache["frame_id"] = frame_id
-                segmentation_cache["prompt"] = prompt
-                segmentation_cache["camera"] = camera
-                segmentation_cache["timestamp"] = time.time()
-                # Snapshot the camera→base_footprint TF at segmentation
-                # time and cache it. This ensures that a later
-                # get_topdown_grasp_pose call produces a correct base-frame
-                # centroid even if the base or arm moved in between: the
-                # pointcloud points were captured relative to the camera pose
-                # at THIS instant, and must be transformed with the TF at
-                # THIS instant (not a fresh lookup at call time).
-                segmentation_cache.pop("tf_translation", None)
-                segmentation_cache.pop("tf_rotation", None)
-                try:
-                    tf_result = ws_manager.send_action_goal(
-                        action_name="/tf2_buffer_server",
-                        action_type="tf2_msgs/action/LookupTransform",
-                        goal={
-                            "target_frame": "base_footprint",
-                            "source_frame": frame_id,
-                            "source_time": {"sec": 0, "nanosec": 0},
-                            "timeout": {"sec": 2, "nanosec": 0},
-                            "advanced": False,
-                        },
-                        timeout=5.0,
+            if pc_result["data"] is None:
+                return {
+                    "error": (
+                        f"Segmentation of '{prompt}' on {camera} camera reported "
+                        f"SUCCESS, but its point cloud did not arrive"
+                        + (f" ({pc_result['error']})" if pc_result["error"] else "")
+                        + ". Nothing is cached; segment again."
                     )
-                    tf = tf_result.get("transform", {}).get("transform", {})
-                    segmentation_cache["tf_translation"] = tf.get("translation", {})
-                    segmentation_cache["tf_rotation"] = tf.get("rotation", {})
-                except Exception:
-                    pass  # grasping tool will fall back to a fresh lookup
-                pc_info = f" Point cloud cached ({len(points)} points)."
-            else:
-                pc_info = " Warning: point cloud not captured."
+                }
+            points, colors, frame_id = pc_result["data"]
+            segmentation_cache["points"] = points
+            segmentation_cache["colors"] = colors
+            segmentation_cache["frame_id"] = frame_id
+            segmentation_cache["prompt"] = prompt
+            segmentation_cache["camera"] = camera
+            segmentation_cache["timestamp"] = time.time()
+            # Snapshot the camera→base_footprint TF at segmentation
+            # time and cache it. This ensures that a later
+            # get_topdown_grasp_pose call produces a correct base-frame
+            # centroid even if the base or arm moved in between: the
+            # pointcloud points were captured relative to the camera pose
+            # at THIS instant, and must be transformed with the TF at
+            # THIS instant (not a fresh lookup at call time).
+            segmentation_cache.pop("tf_translation", None)
+            segmentation_cache.pop("tf_rotation", None)
+            try:
+                tf_result = ws_manager.send_action_goal(
+                    action_name="/tf2_buffer_server",
+                    action_type="tf2_msgs/action/LookupTransform",
+                    goal={
+                        "target_frame": "base_footprint",
+                        "source_frame": frame_id,
+                        "source_time": {"sec": 0, "nanosec": 0},
+                        "timeout": {"sec": 2, "nanosec": 0},
+                        "advanced": False,
+                    },
+                    timeout=5.0,
+                )
+                tf = tf_result.get("transform", {}).get("transform", {})
+                segmentation_cache["tf_translation"] = tf.get("translation", {})
+                segmentation_cache["tf_rotation"] = tf.get("rotation", {})
+            except Exception:
+                pass  # grasping tool will fall back to a fresh lookup
+            pc_info = f" Point cloud cached ({len(points)} points)."
 
             return {
                 "status": "SUCCESS",
