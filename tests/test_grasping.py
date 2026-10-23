@@ -162,6 +162,26 @@ class TestGraspWithoutCachedCloud:
 class TestGraspEdgeCases:
     """Edge cases for input cleanliness and degenerate clouds."""
 
+    async def test_failed_tf_lookup_gives_no_pose(
+        self,
+        mock_ws_manager: Mock,
+        sample_segmentation_cache: Dict[str, Any],
+    ) -> None:
+        """Without a transform there is no base-frame pose, never camera coordinates."""
+        mcp = FastMCP("test")
+        cache = dict(sample_segmentation_cache)
+        cache.pop("tf_translation")
+        cache.pop("tf_rotation")
+        mock_ws_manager.send_action_goal.side_effect = RuntimeError(
+            "Action /canonical_tf/tf2_buffer_server finished with status 6"
+        )
+        register_grasping_tools(mcp, mock_ws_manager, cache)
+
+        result = await _call(mcp, object_name="red cup")
+        assert result["grasp_pose"] is None
+        assert result["centroid_base_frame"] is None
+        assert "TF lookup failed" in result["warning"]
+
     async def test_empty_points_returns_error(
         self,
         mock_ws_manager: Mock,

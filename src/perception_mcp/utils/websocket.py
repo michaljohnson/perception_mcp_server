@@ -313,6 +313,14 @@ class WebSocketManager:
                         raise RuntimeError(
                             f"Action {action_name} failed: {data.get('values', {})}"
                         )
+                    # rosbridge sends result=True for every finished goal; an
+                    # aborted or canceled one only shows in status (4 = SUCCEEDED).
+                    status = data.get("status")
+                    if status is not None and status != 4:
+                        raise RuntimeError(
+                            f"Action {action_name} finished with status {status} "
+                            f"(not SUCCEEDED): {data.get('values', {})}"
+                        )
                     return data.get("values", {})
         except websocket.WebSocketTimeoutException:
             raise TimeoutError(f"Timeout waiting for action {action_name}")

@@ -145,6 +145,27 @@ class TestPlaceCommonOutputs:
         )
 
 
+class TestPlaceTfFailure:
+    async def test_failed_tf_lookup_is_an_error(
+        self,
+        mock_ws_manager: Mock,
+        sample_segmentation_cache: Dict[str, Any],
+    ) -> None:
+        """Without a transform there is no place pose, never camera coordinates."""
+        mcp = FastMCP("test")
+        cache = dict(sample_segmentation_cache)
+        cache.pop("tf_translation")
+        cache.pop("tf_rotation")
+        mock_ws_manager.send_action_goal.side_effect = RuntimeError(
+            "Action /canonical_tf/tf2_buffer_server finished with status 6"
+        )
+        register_placing_tools(mcp, mock_ws_manager, cache)
+
+        result = await _call(mcp, object_name="bin")
+        assert "TF lookup failed" in result["error"]
+        assert "place_pose" not in result
+
+
 class TestPlaceCacheFallback:
     """No-cache path: tool must pull from the topic and crop on request."""
 
