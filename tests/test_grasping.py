@@ -10,6 +10,9 @@ from fastmcp import Client, FastMCP
 
 from perception_mcp.tools.grasping import register_grasping_tools
 
+# A raw (not latched) cloud topic, for the no-cache fallback.
+RAW_TOPIC = "/camera/arm_camera/depth/color/points"
+
 
 @pytest.fixture
 def grasping_server(
@@ -124,11 +127,24 @@ class TestGraspWithoutCachedCloud:
         )
         register_grasping_tools(mcp, mock_ws_manager, empty_cache)
 
-        result = await _call(mcp, object_name="cube")
+        result = await _call(mcp, object_name="cube", pointcloud_topic=RAW_TOPIC)
         # Either the success path or an error from the (mocked) TF lookup
         # is acceptable here; what matters is the fallback was exercised.
         assert mock_ws_manager.get_pointcloud.called
         assert "object_name" in result
+
+    async def test_empty_cache_does_not_read_latched_segmented_topic(
+        self,
+        mock_ws_manager: Mock,
+    ) -> None:
+        """The segmented topic is latched: it would replay an old segmentation."""
+        mcp = FastMCP("test")
+        register_grasping_tools(mcp, mock_ws_manager, {})
+
+        result = await _call(mcp, object_name="cube")
+        assert "error" in result
+        assert "segment_objects" in result["error"]
+        mock_ws_manager.get_pointcloud.assert_not_called()
 
     async def test_timeout_returns_error_dict(
         self,
@@ -138,7 +154,7 @@ class TestGraspWithoutCachedCloud:
         mock_ws_manager.get_pointcloud.side_effect = TimeoutError("no message")
         register_grasping_tools(mcp, mock_ws_manager, {})
 
-        result = await _call(mcp, object_name="cube")
+        result = await _call(mcp, object_name="cube", pointcloud_topic=RAW_TOPIC)
         assert "error" in result
         assert "timeout" in result["error"].lower()
 

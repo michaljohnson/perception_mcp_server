@@ -171,6 +171,19 @@ class TestPlaceCacheFallback:
         )
         assert mock_ws_manager.get_pointcloud.called
 
+    async def test_empty_cache_does_not_read_latched_segmented_topic(
+        self,
+        mock_ws_manager: Mock,
+    ) -> None:
+        """The segmented topic is latched: it would replay an old segmentation."""
+        mcp = FastMCP("test")
+        register_placing_tools(mcp, mock_ws_manager, {})
+
+        result = await _call(mcp, object_name="bin")
+        assert "error" in result
+        assert "segment_objects" in result["error"]
+        mock_ws_manager.get_pointcloud.assert_not_called()
+
     async def test_timeout_returns_error_dict(
         self,
         mock_ws_manager: Mock,
