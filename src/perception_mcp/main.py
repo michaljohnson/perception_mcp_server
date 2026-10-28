@@ -112,7 +112,7 @@ def _startup_health_check():
     if rosbridge_ok:
         try:
             result = ws_manager.send_action_goal(
-                action_name="/tf2_buffer_server",
+                action_name="/canonical_tf/tf2_buffer_server",  # the instance the tools use (utils/transforms.py)
                 action_type="tf2_msgs/action/LookupTransform",
                 goal={
                     "target_frame": "base_footprint",
@@ -124,16 +124,16 @@ def _startup_health_check():
                 timeout=4.0,
             )
             if result.get("transform"):
-                print("[health] tf2_buffer_server OK", file=sys.stderr)
+                print("[health] /canonical_tf/tf2_buffer_server OK", file=sys.stderr)
             else:
                 raise RuntimeError(f"unexpected response: {result}")
         except Exception as e:
             print(
-                f"[health] ERROR: tf2_buffer_server NOT responding ({e}).\n"
+                f"[health] ERROR: /canonical_tf/tf2_buffer_server NOT responding ({e}).\n"
                 f"        get_topdown_grasp_pose will return grasp_pose=None.\n"
                 f"        Pick agents typically misread this as segmentation failure.\n"
                 f"        Start it with:\n"
-                f"          ros2 run tf2_ros buffer_server",
+                f"          ros2 run tf2_ros buffer_server --ros-args -r __ns:=/canonical_tf",
                 file=sys.stderr,
             )
     else:

@@ -59,8 +59,9 @@ def _tf_lookup(
     intermittent wrong transforms (camera-frame depth leaking through
     as base-frame z, etc.).
 
-    The canonical instance is launched by start_mcp_servers.sh under
-    namespace /canonical_tf with use_sim_time:=true.
+    The canonical instance is launched by the MCP start script under
+    namespace /canonical_tf (use_sim_time true in simulation, false on the
+    real robot).
 
     Returns:
         (translation, rotation) where translation is a dict {x, y, z}
