@@ -173,3 +173,16 @@ class TestMissingCloud:
         assert "error" in result
         assert "status" not in result
         assert cache == {}
+
+
+class TestTfSnapshot:
+    async def test_snapshot_uses_the_canonical_tf_server(self, ws_manager, monkeypatch) -> None:
+        bridge = FakeBridge(
+            latched={STATUS: {"data": "NO_OBJECTS_FOUND"}, CLOUD: _cloud(1, 1.0)},
+            run={STATUS: [{"data": "SEGMENTING"}, {"data": "SUCCESS"}], CLOUD: [_cloud(2, 2.0)]},
+        )
+        cache: Dict[str, Any] = {}
+        result = await _segment(bridge, ws_manager, cache, monkeypatch)
+        assert result["status"] == "SUCCESS"
+        assert ws_manager.send_action_goal.call_args.kwargs["action_name"] == "/canonical_tf/tf2_buffer_server"
+        assert cache["tf_rotation"] == {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
