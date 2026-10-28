@@ -22,6 +22,7 @@ import uuid
 import websocket
 from fastmcp import FastMCP
 
+from perception_mcp.utils.transforms import _tf_lookup
 from perception_mcp.utils.websocket import WebSocketManager
 
 
@@ -281,21 +282,9 @@ def register_segmentation_tools(
             segmentation_cache.pop("tf_translation", None)
             segmentation_cache.pop("tf_rotation", None)
             try:
-                tf_result = ws_manager.send_action_goal(
-                    action_name="/tf2_buffer_server",
-                    action_type="tf2_msgs/action/LookupTransform",
-                    goal={
-                        "target_frame": "base_footprint",
-                        "source_frame": frame_id,
-                        "source_time": {"sec": 0, "nanosec": 0},
-                        "timeout": {"sec": 2, "nanosec": 0},
-                        "advanced": False,
-                    },
-                    timeout=5.0,
-                )
-                tf = tf_result.get("transform", {}).get("transform", {})
-                segmentation_cache["tf_translation"] = tf.get("translation", {})
-                segmentation_cache["tf_rotation"] = tf.get("rotation", {})
+                translation, rotation = _tf_lookup(ws_manager, frame_id, "base_footprint", timeout=3.0)
+                segmentation_cache["tf_translation"] = translation
+                segmentation_cache["tf_rotation"] = rotation
             except Exception:
                 pass  # grasping tool will fall back to a fresh lookup
             pc_info = f" Point cloud cached ({len(points)} points)."
