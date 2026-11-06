@@ -9,6 +9,7 @@ import pytest
 from fastmcp import Client, FastMCP
 
 from perception_mcp.tools.placing import register_placing_tools
+from perception_mcp.utils.transforms import GRIPPER_FINGER_OFFSET_M
 
 
 @pytest.fixture
@@ -82,7 +83,7 @@ class TestSurfaceMode:
         self,
         placing_server: tuple[FastMCP, Mock, Dict[str, Any]],
     ) -> None:
-        """wrist_z = top_z + 0.14 (finger) + object_height + clearance."""
+        """wrist_z = top_z + finger offset + object_height + clearance."""
         mcp, _ws, _cache = placing_server
         clearance = 0.05
         obj_h = 0.12  # coke can height
@@ -94,8 +95,7 @@ class TestSurfaceMode:
         )
 
         top_z = result["surface_height_m"]
-        # 0.14 is the Robotiq 140 finger offset baked into the tool.
-        expected = top_z + 0.14 + obj_h + clearance
+        expected = top_z + GRIPPER_FINGER_OFFSET_M + obj_h + clearance
         assert result["place_pose"]["position"]["z"] == pytest.approx(
             expected, abs=1e-3
         )

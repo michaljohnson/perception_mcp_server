@@ -147,7 +147,7 @@ Each camera has its own segmentation node on disjoint topic prefixes:
 
 ### `get_topdown_grasp_pose(object_name, pointcloud_topic="/segmented_pointcloud", timeout=10.0)`
 
-Computes a top-down grasp pose from the cached point cloud (or from a fresh subscription on `pointcloud_topic` as a fallback). Uses centroid-based positioning, a configurable gripper-finger vertical offset (`GRIPPER_FINGER_OFFSET_M` in `utils/transforms.py`, default 0.14 m for Robotiq 2F-140), and a 2D PCA on the base-frame `(x, y)` projection for shape-aware yaw alignment.
+Computes a top-down grasp pose from the cached point cloud (or from a fresh subscription on `pointcloud_topic` as a fallback). Uses centroid-based positioning, a configurable gripper-finger vertical offset (`GRIPPER_FINGER_OFFSET_M` in `utils/transforms.py`, 0.188 m: wrist flange → middle of the finger pads of the Robotiq 2F-140, measured on the Summit XL), and a 2D PCA on the base-frame `(x, y)` projection for shape-aware yaw alignment.
 
 When the segmented object is elongated (aspect ratio ≥ 1.2), the gripper yaw is rotated so the fingers close across the short axis. Otherwise the orientation falls back to strict top-down `(x=1, y=0, z=0, w=0)`.
 

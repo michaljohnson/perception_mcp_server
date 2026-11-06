@@ -9,6 +9,7 @@ import pytest
 from fastmcp import Client, FastMCP
 
 from perception_mcp.tools.grasping import register_grasping_tools
+from perception_mcp.utils.transforms import GRIPPER_FINGER_OFFSET_M
 
 # A raw (not latched) cloud topic, for the no-cache fallback.
 RAW_TOPIC = "/camera/arm_camera/depth/color/points"
@@ -71,12 +72,11 @@ class TestGraspFromCachedCloud:
         self,
         grasping_server: tuple[FastMCP, Mock, Dict[str, Any]],
     ) -> None:
-        """Wrist z must be centroid_base.z + 0.14 (Robotiq finger offset)."""
+        """Wrist z = centroid_base.z + the wrist → finger pad offset."""
         mcp, _ws, _cache = grasping_server
         result = await _call(mcp, object_name="red cup")
-        # GRIPPER_FINGER_OFFSET_M is 0.14.
-        assert result["gripper_offset_m"] == pytest.approx(0.14)
-        expected_z = result["centroid_base_frame"]["z"] + 0.14
+        assert result["gripper_offset_m"] == pytest.approx(GRIPPER_FINGER_OFFSET_M)
+        expected_z = result["centroid_base_frame"]["z"] + GRIPPER_FINGER_OFFSET_M
         assert result["grasp_pose"]["position"]["z"] == pytest.approx(
             round(expected_z, 4), abs=1e-4
         )
