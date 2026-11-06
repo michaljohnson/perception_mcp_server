@@ -16,9 +16,10 @@ approach: 180° rotation about X (the EEF frame has Z-up at rest, so we
 flip to Z-down). Used by both grasp and drop poses.
 
 `GRIPPER_FINGER_OFFSET_M` is the distance from the gripper's wrist
-frame to the fingertips. MoveIt plans poses for the wrist link, so any
-tool computing a fingertip target needs to subtract / add this offset
-to convert between wrist and fingertip space.
+frame to the middle of the finger pads, where a grasped object sits.
+MoveIt plans poses for the wrist link, so any tool computing a grasp
+target needs to subtract / add this offset to convert between wrist
+and finger space.
 """
 
 import numpy as np
@@ -27,10 +28,11 @@ import numpy as np
 # down. 180° rotation about X axis.
 TOP_DOWN_ORIENTATION = {"x": 1.0, "y": 0.0, "z": 0.0, "w": 0.0}
 
-# Robotiq 2F-140 finger length offset (wrist frame → fingertip).
-# When the wrist is at z = wrist_z (top-down), the fingertips reach
-# down to z = wrist_z - GRIPPER_FINGER_OFFSET_M.
-GRIPPER_FINGER_OFFSET_M = 0.14
+# Robotiq 2F-140 on the UR5: wrist flange → middle of the finger pads (gripper open),
+# measured on the Summit XL: 0.22 m to the fingertips minus half the 0.065 m pad.
+# When the wrist is at z = wrist_z (top-down), the pads' middle is at
+# z = wrist_z - GRIPPER_FINGER_OFFSET_M.
+GRIPPER_FINGER_OFFSET_M = 0.188
 
 
 def _quat_to_rotation_matrix(qx: float, qy: float, qz: float, qw: float) -> np.ndarray:

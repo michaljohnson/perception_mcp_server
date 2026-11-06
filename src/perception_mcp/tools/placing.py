@@ -38,18 +38,19 @@ simple statistics are enough.
 import numpy as np
 from fastmcp import FastMCP
 
-# Distance from gripper wrist link to the inner finger pads (where a
-# grasped object sits). UR5e + Robotiq 2F-140 ≈ 14cm. Used in surface
-# mode to compute correct wrist Z so the held object's bottom lands at
-# `surface + top_clearance_m` rather than the wrist.
-_GRIPPER_FINGER_LENGTH = 0.14
-
 from perception_mcp.utils.transforms import (
+    GRIPPER_FINGER_OFFSET_M,
     TOP_DOWN_ORIENTATION,
     _quat_to_rotation_matrix,
     _tf_lookup,
 )
 from perception_mcp.utils.websocket import WebSocketManager
+
+# Distance from gripper wrist link to the inner finger pads (where a
+# grasped object sits), the same as for grasping. Used in surface
+# mode to compute correct wrist Z so the held object's bottom lands at
+# `surface + top_clearance_m` rather than the wrist.
+_GRIPPER_FINGER_LENGTH = GRIPPER_FINGER_OFFSET_M
 
 
 def register_placing_tools(
@@ -70,7 +71,7 @@ def register_placing_tools(
             "Pass `top_clearance_m=0.35`. Wrist ends up at top_z + 0.35.\n"
             "  - **Surface mode** (object_height_m > 0): set DOWN on a "
             "flat surface (table/counter). Tool accounts for "
-            "gripper finger length (~14cm) + object height so the held "
+            f"gripper finger length ({_GRIPPER_FINGER_LENGTH} m) + object height so the held "
             "object's bottom lands at `surface + top_clearance_m`. Pass "
             "object_height_m per held object (~0.12 for coke can, ~0.10 "
             "for shoe) and top_clearance_m as the desired air gap (e.g. "
@@ -82,7 +83,7 @@ def register_placing_tools(
             "  4. cx, cy = mean of point xy; top_z = 95th percentile of z.\n"
             "  5. wrist_z formula:\n"
             "       container: wrist_z = top_z + top_clearance_m\n"
-            "       surface:   wrist_z = top_z + 0.14 (finger) + "
+            f"       surface:   wrist_z = top_z + {_GRIPPER_FINGER_LENGTH} (finger) + "
             "object_height_m + top_clearance_m\n"
             "     orientation = strict top-down (1, 0, 0, 0).\n\n"
             "PRECONDITION: pre-position the robot so the target is in the\n"

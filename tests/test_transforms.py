@@ -36,8 +36,8 @@ class TestModuleConstants:
         assert TOP_DOWN_ORIENTATION == {"x": 1.0, "y": 0.0, "z": 0.0, "w": 0.0}
 
     def test_gripper_finger_offset_is_robotiq_140(self) -> None:
-        """The wrist→fingertip offset matches the Robotiq 2F-140 default."""
-        assert GRIPPER_FINGER_OFFSET_M == pytest.approx(0.14)
+        """Wrist → middle of the finger pads, as measured on the Summit's Robotiq 2F-140."""
+        assert GRIPPER_FINGER_OFFSET_M == pytest.approx(0.188)
 
     def test_pca_aspect_ratio_threshold_is_sane(self) -> None:
         """The PCA fallback threshold must sit above unit-aspect noise."""
