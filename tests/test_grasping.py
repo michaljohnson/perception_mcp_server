@@ -72,14 +72,17 @@ class TestGraspFromCachedCloud:
         self,
         grasping_server: tuple[FastMCP, Mock, Dict[str, Any]],
     ) -> None:
-        """Wrist z = centroid_base.z + the wrist → finger pad offset."""
+        """Wrist z = pad middle + the wrist → finger pad offset; pad middle by grasp_z_method."""
         mcp, _ws, _cache = grasping_server
         result = await _call(mcp, object_name="red cup")
         assert result["gripper_offset_m"] == pytest.approx(GRIPPER_FINGER_OFFSET_M)
-        expected_z = result["centroid_base_frame"]["z"] + GRIPPER_FINGER_OFFSET_M
-        assert result["grasp_pose"]["position"]["z"] == pytest.approx(
-            round(expected_z, 4), abs=1e-4
-        )
+        assert result["grasp_z_method"] in ("centroid", "below_top", "above_support")
+        if result["grasp_z_method"] == "centroid":
+            expected_z = result["centroid_base_frame"]["z"] + GRIPPER_FINGER_OFFSET_M
+            assert result["grasp_pose"]["position"]["z"] == pytest.approx(
+                round(expected_z, 4), abs=1e-4
+            )
+        assert result["pre_grasp_pose"]["position"]["z"] >= result["grasp_pose"]["position"]["z"]
 
     async def test_num_points_matches_cache_size(
         self,
@@ -199,3 +202,28 @@ class TestGraspEdgeCases:
         result = await _call(mcp, object_name="ghost")
         assert "error" in result
         assert "empty" in result["error"].lower()
+
+
+class TestGraspXYFromRealCloud:
+    """The grasp pose uses near face + half width, not the centroid."""
+
+    async def test_cylinder_grasp_x_matches_the_hover_test(self, mock_ws_manager: Mock) -> None:
+        # Real cloud in base_footprint; identity rotation and the camera origin as the
+        # TF translation reproduce it from "camera frame" points.
+        from pathlib import Path
+
+        cam = np.array([0.4314, -0.1109, 0.679])
+        points = np.load(Path(__file__).parent / "data" / "cylinder_1.npy") - cam
+        cache = {
+            "points": points,
+            "colors": np.full((len(points), 3), 128, dtype=np.uint8),
+            "frame_id": "arm_camera_color_optical_frame",
+            "tf_translation": {"x": cam[0], "y": cam[1], "z": cam[2]},
+            "tf_rotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+        }
+        mcp = FastMCP("test-perception-grasp-real")
+        register_grasping_tools(mcp, mock_ws_manager, cache)
+        result = await _call(mcp, object_name="orange cylinder")
+        assert result["grasp_xy_method"] == "near_face"
+        # Hover test on the robot: 0.983. The centroid (old rule) was 0.972, 1.1 cm short.
+        assert result["grasp_pose"]["position"]["x"] == pytest.approx(0.983, abs=0.005)
