@@ -1,9 +1,10 @@
-"""Tests for ``WebSocketManager.send_action_goal`` against a fake rosbridge socket."""
+"""Tests for ``WebSocketManager`` against fake rosbridge sockets."""
 
 import json
 from typing import Any, Dict, Optional
 
 import pytest
+import websocket
 
 from perception_mcp.utils.websocket import WebSocketManager
 
@@ -64,3 +65,65 @@ class TestSendActionGoal:
     def test_failed_call_raises(self) -> None:
         with pytest.raises(RuntimeError, match="failed"):
             _send(result=False, status=None)
+
+
+class StreamingBridge:
+    """Each subscribe makes rosbridge send three frames, numbered in send order."""
+
+    def __init__(self) -> None:
+        self.sent = 0
+        self.sockets = []
+
+    def socket(self, *_args, **_kwargs) -> "StreamingSocket":
+        sock = StreamingSocket(self)
+        self.sockets.append(sock)
+        return sock
+
+
+class StreamingSocket:
+    def __init__(self, bridge: StreamingBridge) -> None:
+        self.bridge = bridge
+        self.queue = []
+        self.connected = True
+
+    def send(self, raw: str) -> None:
+        msg = json.loads(raw)
+        if msg["op"] == "subscribe":
+            for _ in range(3):
+                self.bridge.sent += 1
+                self.queue.append(json.dumps({"topic": msg["topic"], "msg": {"seq": self.bridge.sent}}))
+
+    def settimeout(self, _timeout: float) -> None:
+        pass
+
+    def recv(self) -> str:
+        if not self.queue:
+            raise websocket.WebSocketTimeoutException("no data")
+        return self.queue.pop(0)
+
+    def close(self) -> None:
+        self.connected = False
+
+
+class TestSubscribeOnce:
+    def test_second_call_gets_a_frame_sent_after_its_subscribe(self, monkeypatch) -> None:
+        bridge = StreamingBridge()
+        monkeypatch.setattr(websocket, "create_connection", bridge.socket)
+        manager = WebSocketManager("localhost", 9090)
+        assert manager.subscribe_once("/img")["seq"] == 1
+        # Frames 2 and 3 were sent after the first call returned; they must not come back.
+        assert manager.subscribe_once("/img")["seq"] == 4
+
+    def test_connection_closed_after_message(self, monkeypatch) -> None:
+        bridge = StreamingBridge()
+        monkeypatch.setattr(websocket, "create_connection", bridge.socket)
+        WebSocketManager("localhost", 9090).subscribe_once("/img")
+        assert not bridge.sockets[0].connected
+
+    def test_connection_closed_after_timeout(self, monkeypatch) -> None:
+        silent = StreamingSocket(StreamingBridge())
+        silent.send = lambda raw: None  # subscribed, but nothing ever arrives
+        monkeypatch.setattr(websocket, "create_connection", lambda *a, **k: silent)
+        with pytest.raises(TimeoutError):
+            WebSocketManager("localhost", 9090).subscribe_once("/img", timeout=0.1)
+        assert not silent.connected
