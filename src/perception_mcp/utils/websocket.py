@@ -52,7 +52,9 @@ class WebSocketManager:
             dict: The received message
         """
         timeout = timeout or self.default_timeout
-        ws = self._ensure_connected()
+        # Own connection per call: frames rosbridge sends after the first one would
+        # otherwise wait in the shared socket and come back on the next call as if new.
+        ws = websocket.create_connection(self.url, timeout=timeout)
 
         sub_id = f"subscribe:{topic}:{uuid.uuid4().hex[:8]}"
 
@@ -63,27 +65,19 @@ class WebSocketManager:
             "topic": topic,
             "type": msg_type,
         }
-        ws.send(json.dumps(subscribe_msg))
-
-        # Wait for message
-        ws.settimeout(timeout)
         try:
+            ws.send(json.dumps(subscribe_msg))
+            ws.settimeout(timeout)
             while True:
                 raw = ws.recv()
                 data = json.loads(raw)
                 if data.get("topic") == topic:
-                    # Unsubscribe
-                    unsub_msg = {"op": "unsubscribe", "id": sub_id, "topic": topic}
-                    ws.send(json.dumps(unsub_msg))
                     return data.get("msg", {})
         except websocket.WebSocketTimeoutException:
-            # Unsubscribe on timeout
-            unsub_msg = {"op": "unsubscribe", "id": sub_id, "topic": topic}
-            try:
-                ws.send(json.dumps(unsub_msg))
-            except Exception:
-                pass
             raise TimeoutError(f"Timeout waiting for message on {topic}")
+        finally:
+            # Closing ends the subscription in rosbridge and drops unread frames.
+            ws.close()
 
     def get_compressed_image(
         self, topic: str, timeout: float = None
