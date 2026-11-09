@@ -132,12 +132,10 @@ def _transform_points(points: np.ndarray, translation: dict, rotation: dict) -> 
 #   - coke can on its base (true ratio ~1.0): same as cube
 #   - shoe: ~2.0-3.0 — genuine long axis
 #   - coke can on its side: ~2.5 — genuine long axis
-# 2026-05-16: raised 1.2 → 1.5 after a skill_based pick on a white cube
-# failed with PLANNING_FAILED. Segmentation reported aspect=1.21 → PCA
-# fired → 68 deg arbitrary yaw → IK landed in a wrist-twisted branch
-# unreachable from look_forward. 1.5 sits in the gap between cube noise
-# and real elongation. See [[project_session_2026_05_16]] for the run.
-_PCA_ASPECT_RATIO_MIN = 1.5
+#   - card deck (true ratio ~1.5): observed ~1.5
+# A yaw from noise can put the IK into a wrist-twisted branch, so the
+# threshold sits just above the cube noise.
+_PCA_ASPECT_RATIO_MIN = 1.4
 
 
 def _principal_axis_angle_xy(points_base: np.ndarray) -> tuple[float, float]:
@@ -171,6 +169,77 @@ def _principal_axis_angle_xy(points_base: np.ndarray) -> tuple[float, float]:
     angle_long = float(np.arctan2(long_axis[1], long_axis[0]))
     aspect_ratio = float(np.sqrt(lam_long / lam_short))
     return angle_long, aspect_ratio
+
+
+# Below this horizontal camera-object distance the camera looks down on the
+# object and sees its whole top, so the trimmed bbox middle is used instead.
+_NEAR_FACE_MIN_VIEW_DIST_M = 0.10
+
+
+def _grasp_xy(points_base: np.ndarray, camera_xy: tuple[float, float]) -> tuple[float, float, str]:
+    """Grasp centre in the xy plane: near face + half width along the view.
+
+    A camera sees only the side of an object that faces it, so the far half of
+    the cloud is missing and a few stray points can sit behind it. The point
+    mean is pulled towards the camera and the bbox middle away from it (by
+    1-4 cm for small objects). The near face and the width across the view
+    are stable: centre = near face + half width along the camera-object
+    direction, and the middle of the width across it. Percentiles (5/95)
+    ignore stray points. Assumes the object is about as deep as it is wide.
+
+    Returns ``(x, y, method)`` with method ``"near_face"`` or ``"trimmed_bbox"``.
+    """
+    xy = points_base[:, :2]
+    d = xy.mean(axis=0) - np.asarray(camera_xy, dtype=float)
+    dist = float(np.linalg.norm(d))
+    if dist < _NEAR_FACE_MIN_VIEW_DIST_M:
+        lo, hi = np.percentile(xy, [5, 95], axis=0)
+        mid = (lo + hi) / 2
+        return float(mid[0]), float(mid[1]), "trimmed_bbox"
+    d /= dist
+    n = np.array([-d[1], d[0]])
+    near = np.percentile(xy @ d, 5)
+    lo, hi = np.percentile(xy @ n, [5, 95])
+    centre = (near + (hi - lo) / 2) * d + ((lo + hi) / 2) * n
+    return float(centre[0]), float(centre[1]), "near_face"
+
+
+# How far an object may stick up above the finger pads without touching the
+# gripper's palm (measured: more than 6 cm, kept with a margin).
+_MAX_ABOVE_PADS_M = 0.05
+# Wrist flange to fingertips of the Robotiq 2F-140, measured. The pad offset
+# above uses 0.22; the larger value here keeps the fingertips higher.
+_FINGERTIP_OFFSET_M = 0.225
+# The lowest seen points sit 1-2 cm above the support (the camera rarely sees
+# an object's bottom edge); the fingertips may go this far below them.
+_BELOW_LOWEST_SEEN_M = 0.005
+# Fingertips this far above the object's top for the pre-grasp.
+_PRE_GRASP_CLEARANCE_M = 0.10
+
+
+def _grasp_z(points_base: np.ndarray) -> tuple[float, float, str]:
+    """Flange z for the grasp and the pre-grasp from the object's height.
+
+    The pad middle goes to the centroid height, but no lower than
+    ``_MAX_ABOVE_PADS_M`` below the object's top, so a tall object does not
+    run into the palm, and never so low that the fingertips go more than
+    ``_BELOW_LOWEST_SEEN_M`` below the object's lowest seen points. Top and
+    bottom are the 99th and 1st z percentiles.
+
+    Returns ``(grasp_z, pre_grasp_z, method)`` with method ``"centroid"``,
+    ``"below_top"`` or ``"above_support"``.
+    """
+    z = points_base[:, 2]
+    bottom, top = np.percentile(z, [1, 99])
+    pad_z, method = float(z.mean()), "centroid"
+    if pad_z < top - _MAX_ABOVE_PADS_M:
+        pad_z, method = float(top - _MAX_ABOVE_PADS_M), "below_top"
+    grasp_z = pad_z + GRIPPER_FINGER_OFFSET_M
+    lowest = float(bottom) - _BELOW_LOWEST_SEEN_M + _FINGERTIP_OFFSET_M
+    if grasp_z < lowest:
+        grasp_z, method = lowest, "above_support"
+    pre_grasp_z = max(grasp_z, float(top) + _FINGERTIP_OFFSET_M + _PRE_GRASP_CLEARANCE_M)
+    return grasp_z, pre_grasp_z, method
 
 
 def _shortest_grasp_yaw(angle_long_rad: float) -> float:

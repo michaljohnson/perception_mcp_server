@@ -13,6 +13,8 @@ from perception_mcp.utils.transforms import (
     GRIPPER_FINGER_OFFSET_M,
     TOP_DOWN_ORIENTATION,
     _PCA_ASPECT_RATIO_MIN,
+    _grasp_xy,
+    _grasp_z,
     _oriented_topdown_quaternion,
     _principal_axis_angle_xy,
     _shortest_grasp_yaw,
@@ -37,15 +39,23 @@ def register_grasping_tools(
             "Compute a grasp pose from the segmented point cloud.\n\n"
             "Uses the cached point cloud from the last segment_objects() call.\n"
             "Computes the centroid, transforms it from camera frame to base_footprint\n"
-            "via TF2, and returns a top-down grasp pose ready for MoveIt.\n\n"
+            "via TF2, and returns a top-down grasp pose ready for MoveIt.\n"
+            "The grasp x/y is the object's near face (seen from the camera) plus\n"
+            "half its width, not the centroid: the camera sees only the front of\n"
+            "an object. grasp_xy_method says which rule applied.\n\n"
             "The grasp pose accounts for the Robotiq 140 gripper finger length:\n"
-            f"the wrist is {GRIPPER_FINGER_OFFSET_M} m above the object centroid, so the\n"
-            "middle of the finger pads is at the centroid.\n\n"
+            f"the wrist is {GRIPPER_FINGER_OFFSET_M} m above the pad middle. The pad middle\n"
+            "goes to the centroid height, but no lower than 5 cm below the object's top\n"
+            "(tall objects would hit the palm), and the fingertips never go below the\n"
+            "object's lowest seen points. pre_grasp_pose is the same pose\n"
+            "with the fingertips 10 cm above the object's top: go there first, then\n"
+            "descend to grasp_pose. grasp_z_method says which height rule applied.\n"
+            "Not handled: long objects pointing at the camera (x lands too close).\n\n"
             "Orientation is shape-aware: a 2D PCA on the base-frame xy\n"
             "projection of the point cloud gives the object's principal\n"
             "axis, and the gripper yaw is set so the fingers close ACROSS\n"
             "the short axis. For approximately round / square top-down\n"
-            "footprints (aspect ratio < 1.2) the default top-down\n"
+            f"footprints (aspect ratio < {_PCA_ASPECT_RATIO_MIN}) the default top-down\n"
             "orientation [1, 0, 0, 0] is returned unchanged. The response\n"
             "exposes principal_axis_angle_rad, principal_axis_angle_deg,\n"
             "principal_axis_aspect_ratio, and a boolean oriented flag so\n"
@@ -148,9 +158,8 @@ def register_grasping_tools(
             # Round / square footprints (aspect ratio below the threshold)
             # fall back to the default top-down orientation.
             #
-            # Empirical Robotiq 2F-140 finger-axis convention (validated
-            # 2026-05-12 on a red shoe): the fingers close along the
-            # gripper-tool X axis, NOT tool Y as initially assumed.
+            # Robotiq 2F-140 finger axis: the
+            # fingers close along the gripper-tool X axis, not tool Y.
             # After the top-down flip (q_topdown = 180 deg about base-X)
             # the finger axis maps to base +X. To rotate the fingers
             # ACROSS the object's short axis, the gripper yaw therefore
@@ -187,12 +196,16 @@ def register_grasping_tools(
                 orientation = TOP_DOWN_ORIENTATION
                 oriented = False
 
+            grasp_x, grasp_y, grasp_xy_method = _grasp_xy(
+                points_base, (translation["x"], translation["y"])
+            )
+            grasp_z, pre_grasp_z, grasp_z_method = _grasp_z(points_base)
             grasp_pose = {
                 "frame_id": "base_footprint",
                 "position": {
-                    "x": centroid_base["x"],
-                    "y": centroid_base["y"],
-                    "z": round(centroid_base["z"] + GRIPPER_FINGER_OFFSET_M, 4),
+                    "x": round(grasp_x, 4),
+                    "y": round(grasp_y, 4),
+                    "z": round(grasp_z, 4),
                 },
                 "orientation": orientation,
             }
@@ -202,6 +215,12 @@ def register_grasping_tools(
                 "centroid_camera_frame": centroid_camera,
                 "centroid_base_frame": centroid_base,
                 "grasp_pose": grasp_pose,
+                "grasp_xy_method": grasp_xy_method,
+                "grasp_z_method": grasp_z_method,
+                "pre_grasp_pose": {
+                    **grasp_pose,
+                    "position": {**grasp_pose["position"], "z": round(pre_grasp_z, 4)},
+                },
                 "bounding_box": bounding_box,
                 "bbox_base_frame": bbox_base,
                 "num_points": len(points),

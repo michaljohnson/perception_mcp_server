@@ -10,6 +10,8 @@ import math
 from typing import Dict
 from unittest.mock import Mock
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -18,6 +20,8 @@ from perception_mcp.utils.transforms import (
     TOP_DOWN_ORIENTATION,
     _oriented_topdown_quaternion,
     _PCA_ASPECT_RATIO_MIN,
+    _grasp_xy,
+    _grasp_z,
     _principal_axis_angle_xy,
     _quat_multiply,
     _quat_to_rotation_matrix,
@@ -360,3 +364,102 @@ class TestTfLookup:
         ws.send_action_goal.side_effect = RuntimeError("rosbridge down")
         with pytest.raises(RuntimeError, match="rosbridge down"):
             _tf_lookup(ws, source_frame="x")
+
+
+DATA = Path(__file__).parent / "data"
+# Arm camera origin in base_footprint at look_forward, from TF on the robot.
+LOOK_FORWARD_CAMERA_XY = (0.4314, -0.1109)
+
+
+def _box_seen_from_front(centre_x: float, size: float, n: int = 40) -> np.ndarray:
+    """Front face (x = centre - size/2) and top of a box; the back is not seen."""
+    h = size / 2
+    s = np.linspace(-h, h, n)
+    front = np.array([[centre_x - h, y, z + h] for y in s for z in s])
+    top = np.array([[centre_x + x, y, size] for x in s for y in s])
+    return np.vstack([front, front, top])  # the near face dominates, as on the robot
+
+
+class TestGraspXY:
+    """Tests for ``_grasp_xy`` (near face + half width along the view)."""
+
+    def test_box_seen_from_front_with_stray_points(self) -> None:
+        cloud = _box_seen_from_front(1.0, 0.057)
+        stray = np.array([[1.09, 0.0, 0.03]] * (len(cloud) // 50))  # 2 % behind the box
+        x, y, method = _grasp_xy(np.vstack([cloud, stray]), (0.0, 0.0))
+        assert method == "near_face"
+        assert x == pytest.approx(1.0, abs=0.003)
+        assert y == pytest.approx(0.0, abs=0.003)
+
+    def test_camera_above_object_uses_trimmed_bbox(self) -> None:
+        cloud = _box_seen_from_front(1.0, 0.057)
+        _, _, method = _grasp_xy(cloud, (1.0, 0.0))
+        assert method == "trimmed_bbox"
+
+    # Real arm-camera clouds (base_footprint); x confirmed by hovering
+    # the gripper over the objects (by eye, about +-1 cm) and grasping them.
+    @pytest.mark.parametrize("name,x_real", [("cube_1", 1.021), ("cylinder_1", 0.983)])
+    def test_real_clouds(self, name: str, x_real: float) -> None:
+        x, _, method = _grasp_xy(np.load(DATA / f"{name}.npy"), LOOK_FORWARD_CAMERA_XY)
+        assert method == "near_face"
+        assert x == pytest.approx(x_real, abs=0.005)
+
+
+def _column(height: float, n: int = 400) -> np.ndarray:
+    """Points of an upright object from 1.5 cm (bottom edge unseen) to its top."""
+    z = np.linspace(0.015, height, n)
+    return np.stack([np.full(n, 1.0), np.zeros(n), z], axis=1)
+
+
+class TestGraspZ:
+    """Tests for ``_grasp_z`` (pad middle at the centroid, below the top, above the support)."""
+
+    def test_short_object_uses_centroid(self) -> None:
+        cloud = _column(0.10)
+        grasp_z, pre_z, method = _grasp_z(cloud)
+        assert method == "centroid"
+        assert grasp_z == pytest.approx(cloud[:, 2].mean() + 0.188, abs=1e-6)
+        assert pre_z == pytest.approx(np.percentile(cloud[:, 2], 99) + 0.225 + 0.10, abs=1e-6)
+
+    def test_tall_object_pads_at_most_5_cm_below_the_top(self) -> None:
+        cloud = _column(0.245)
+        grasp_z, _, method = _grasp_z(cloud)
+        assert method == "below_top"
+        assert grasp_z - 0.188 == pytest.approx(np.percentile(cloud[:, 2], 99) - 0.05, abs=1e-6)
+
+    def test_flat_object_keeps_fingertips_above_its_bottom(self) -> None:
+        cloud = _column(0.02)
+        grasp_z, _, method = _grasp_z(cloud)
+        assert method == "above_support"
+        assert grasp_z - 0.225 == pytest.approx(np.percentile(cloud[:, 2], 1) - 0.005, abs=1e-6)
+
+    # 24 cm bottle: grasped on the robot at flange 0.37 (6.3 cm above the pads, no palm
+    # contact); the centroid rule gave 0.3227 (11 cm above the pads, into the palm).
+    def test_real_bottle(self) -> None:
+        grasp_z, pre_z, method = _grasp_z(np.load(DATA / "bottle_1.npy"))
+        assert method == "below_top"
+        assert 0.37 <= grasp_z <= 0.40
+        assert pre_z == pytest.approx(0.245 + 0.225 + 0.10, abs=0.01)
+
+
+class TestPCAOnRealClouds:
+    """The aspect threshold separates the real robot clouds."""
+
+    @pytest.mark.parametrize("name", ["cube_1", "cylinder_1", "bottle_1"])
+    def test_round_and_square_objects_not_oriented(self, name: str) -> None:
+        _, ratio = _principal_axis_angle_xy(np.load(DATA / f"{name}.npy"))
+        assert ratio < _PCA_ASPECT_RATIO_MIN
+
+    def test_may_cube_noise_not_oriented(self) -> None:
+        # Cube clouds reach aspect 1.21-1.30 from noise; 1.4 must stay above that.
+        rng = np.random.default_rng(0)
+        xy = rng.uniform([-0.030, -0.039], [0.030, 0.039], size=(2000, 2))  # ratio 1.30
+        cloud = np.column_stack([xy + [1.0, 0.0], np.full(2000, 0.05)])
+        _, ratio = _principal_axis_angle_xy(cloud)
+        assert 1.25 < ratio < _PCA_ASPECT_RATIO_MIN
+
+    def test_uno_deck_oriented_across_its_short_side(self) -> None:
+        # Deck at about 51 deg; picked on the robot with grasp yaw -39.4 deg.
+        angle, ratio = _principal_axis_angle_xy(np.load(DATA / "uno_1.npy"))
+        assert ratio >= _PCA_ASPECT_RATIO_MIN
+        assert math.degrees(_shortest_grasp_yaw(angle + math.pi / 2)) == pytest.approx(-39.4, abs=2)
