@@ -32,6 +32,8 @@ def register_segmentation_tools(
     segmentation_cache: dict,
 ) -> None:
     """Register LangSAM segmentation tools (via ROS node)."""
+    # Stamp of the last cloud this server accepted, per cloud topic
+    last_cloud_stamp: dict = {}
 
     @mcp.tool(
         description=(
@@ -113,6 +115,7 @@ def register_segmentation_tools(
         # — root cause of the cube-pick failure on 2026-05-04.
         pc_result = {"data": None, "error": None}
         ready_event = threading.Event()
+        cancelled = threading.Event()
 
         def _capture_pointcloud():
             try:
@@ -127,9 +130,11 @@ def register_segmentation_tools(
                     "type": "sensor_msgs/msg/PointCloud2",
                 }))
 
-                # Phase 1 — drain any latched (stale) messages for ~250ms.
+                # Phase 1 — wait up to 1.5 s for the latched (stale) replay;
+                # DDS discovery of a new subscription often takes longer than
+                # a few hundred ms. After the first message, drain for 250 ms.
                 stale_stamp = None
-                pc_ws.settimeout(0.25)
+                pc_ws.settimeout(1.5)
                 try:
                     while True:
                         raw = pc_ws.recv()
@@ -142,6 +147,7 @@ def register_segmentation_tools(
                             stamp.get("sec", 0),
                             stamp.get("nanosec", 0),
                         )
+                        pc_ws.settimeout(0.25)
                 except (_ws.WebSocketTimeoutException, OSError, TimeoutError):
                     pass  # no more latched messages
 
@@ -161,10 +167,16 @@ def register_segmentation_tools(
                         stamp.get("sec", 0),
                         stamp.get("nanosec", 0),
                     )
-                    if stale_stamp is not None and msg_stamp == stale_stamp:
-                        continue  # still the latched stale one; keep waiting
+                    # A zero stamp says nothing about freshness.
+                    if msg_stamp != (0, 0) and msg_stamp in (
+                        stale_stamp, last_cloud_stamp.get(pointcloud_topic)
+                    ):
+                        continue  # a replay of an earlier cloud; keep waiting
+                    if cancelled.is_set():
+                        break
                     points, colors, frame_id = ws_manager._parse_pointcloud(msg)
                     pc_result["data"] = (points, colors, frame_id)
+                    last_cloud_stamp[pointcloud_topic] = msg_stamp
                     break
 
                 pc_ws.send(json.dumps({
@@ -207,7 +219,14 @@ def register_segmentation_tools(
             # publishing the prompt. Without this, the prompt could trigger SAM3
             # to publish a new pointcloud BEFORE the capture thread has subscribed
             # and recorded the stale baseline.
-            ready_event.wait(timeout=2.0)
+            if not ready_event.wait(timeout=5.0):
+                cancelled.set()
+                return {
+                    "error": (
+                        f"Subscription to {pointcloud_topic} not ready; nothing was "
+                        "segmented. Try again."
+                    )
+                }
 
             # Publish the text prompt to the selected camera's /segment_text
             try:

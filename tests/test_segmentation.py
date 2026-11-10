@@ -186,3 +186,76 @@ class TestTfSnapshot:
         assert result["status"] == "SUCCESS"
         assert ws_manager.send_action_goal.call_args.kwargs["action_name"] == "/canonical_tf/tf2_buffer_server"
         assert cache["tf_rotation"] == {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+
+
+class TestLateLatchedCloud:
+    """rosbridge can replay the latched cloud only after the prompt was published."""
+
+    async def test_previous_cloud_arriving_late_is_not_taken(self, ws_manager, monkeypatch) -> None:
+        cache: Dict[str, Any] = {}
+        mcp = FastMCP("test-segmentation")
+        register_segmentation_tools(mcp, ws_manager, cache)
+
+        async def segment(bridge: FakeBridge) -> Dict[str, Any]:
+            monkeypatch.setattr(websocket, "create_connection", bridge.socket)
+            ws_manager._ensure_connected.return_value = bridge.socket()
+            async with Client(mcp) as client:
+                result = await client.call_tool("segment_objects", {"prompt": "cube", "timeout": 3.0})
+                raw = result.content[0].text if result.content else result.data
+                return json.loads(raw) if isinstance(raw, str) else raw
+
+        first = FakeBridge(
+            latched={},
+            run={STATUS: [{"data": "SEGMENTING"}, {"data": "SUCCESS"}], CLOUD: [_cloud(1, 1.0)]},
+        )
+        assert (await segment(first))["status"] == "SUCCESS"
+        assert cache["points"][0][0] == 1.0
+
+        # Second run: the replay of cloud 1 comes after the prompt, before the new cloud 2.
+        second = FakeBridge(
+            latched={},
+            run={
+                STATUS: [{"data": "SEGMENTING"}, {"data": "SUCCESS"}],
+                CLOUD: [_cloud(1, 1.0), _cloud(2, 2.0)],
+            },
+        )
+        assert (await segment(second))["status"] == "SUCCESS"
+        assert cache["points"][0][0] == 2.0
+
+
+class TestStampMemory:
+    async def _two_runs(self, ws_manager, monkeypatch, first: Dict, second: Dict, cams=("arm", "arm")):
+        cache: Dict[str, Any] = {}
+        mcp = FastMCP("test-segmentation")
+        register_segmentation_tools(mcp, ws_manager, cache)
+        results = []
+        for bridge_args, cam in zip((first, second), cams):
+            bridge = FakeBridge(**bridge_args)
+            monkeypatch.setattr(websocket, "create_connection", bridge.socket)
+            ws_manager._ensure_connected.return_value = bridge.socket()
+            async with Client(mcp) as client:
+                result = await client.call_tool(
+                    "segment_objects", {"prompt": "cube", "camera": cam, "timeout": 3.0}
+                )
+                raw = result.content[0].text if result.content else result.data
+                results.append(json.loads(raw) if isinstance(raw, str) else raw)
+        return results, cache
+
+    async def test_arm_cloud_not_blocked_by_front_cloud_with_same_stamp(self, ws_manager, monkeypatch) -> None:
+        front = {
+            "latched": {},
+            "run": {
+                "/front/segmentation_status": [{"data": "SEGMENTING"}, {"data": "SUCCESS"}],
+                "/front/segmented_pointcloud": [_cloud(5, 1.0)],
+            },
+        }
+        arm = {"latched": {}, "run": {STATUS: [{"data": "SEGMENTING"}, {"data": "SUCCESS"}], CLOUD: [_cloud(5, 2.0)]}}
+        results, cache = await self._two_runs(ws_manager, monkeypatch, front, arm, cams=("front", "arm"))
+        assert results[1]["status"] == "SUCCESS"
+        assert cache["points"][0][0] == 2.0
+
+    async def test_zero_stamps_are_accepted(self, ws_manager, monkeypatch) -> None:
+        run = lambda m: {"latched": {}, "run": {STATUS: [{"data": "SEGMENTING"}, {"data": "SUCCESS"}], CLOUD: [_cloud(0, m)]}}
+        results, cache = await self._two_runs(ws_manager, monkeypatch, run(1.0), run(2.0))
+        assert results[1]["status"] == "SUCCESS"
+        assert cache["points"][0][0] == 2.0
