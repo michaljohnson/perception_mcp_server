@@ -7,6 +7,7 @@ for MoveIt execution.
 
 import math
 
+import numpy as np
 from fastmcp import FastMCP
 
 from perception_mcp.utils.transforms import (
@@ -66,7 +67,9 @@ def register_grasping_tools(
             "object's lowest seen points. pre_grasp_pose is the same pose\n"
             "with the fingertips 10 cm above the object's top: go there first, then\n"
             "descend to grasp_pose. grasp_z_method says which height rule applied.\n"
-            "Not handled: long objects pointing at the camera (x lands too close).\n\n"
+            "Not handled: long objects pointing at the camera (x lands too close).\n"
+            "top_z is the object's top for setting something down on it (99th\n"
+            "percentile of the heights; bbox z_max is the single highest point).\n\n"
             "Orientation is shape-aware: a 2D PCA on the base-frame xy\n"
             "projection of the point cloud gives the object's principal\n"
             "axis, and the gripper yaw is set so the fingers close ACROSS\n"
@@ -196,6 +199,9 @@ def register_grasping_tools(
                 "z_min": round(float(points_base[:, 2].min()), 4),
                 "z_max": round(float(points_base[:, 2].max()), 4),
             }
+            # Top height for setting something down on the object: z_max is a single
+            # point, which depth noise can put cm high; the 99th percentile (as in _grasp_z) is not.
+            top_z = round(float(np.percentile(points_base[:, 2], 99)), 4)
 
             angle_long, aspect_ratio = _principal_axis_angle_xy(points_base)
             if aspect_ratio >= _PCA_ASPECT_RATIO_MIN:
@@ -235,6 +241,7 @@ def register_grasping_tools(
                 },
                 "bounding_box": bounding_box,
                 "bbox_base_frame": bbox_base,
+                "top_z": top_z,
                 "num_points": len(points),
                 "num_points_dropped": dropped,
                 "camera_frame_id": frame_id,

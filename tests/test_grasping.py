@@ -297,6 +297,30 @@ class TestImplausiblePointsDropped:
         assert result["num_points_dropped"] == 1
 
 
+class TestTopHeight:
+    """top_z: the top for setting something down, robust to a few stray points."""
+
+    async def _pose(self, ws: Mock, cache: Dict[str, Any]) -> Dict[str, Any]:
+        mcp = FastMCP("test-perception-grasp-top")
+        register_grasping_tools(mcp, ws, cache)
+        return await _call(mcp, object_name="green cube")
+
+    async def test_stray_points_above_do_not_raise_the_top(self, mock_ws_manager: Mock) -> None:
+        clean = await self._pose(mock_ws_manager, _cube_cache())
+        stray = np.array([[0.9, 0.0, 0.16], [0.91, 0.01, 0.15], [0.9, -0.01, 0.17]])
+        noisy = await self._pose(mock_ws_manager, _cube_cache(stray))
+        assert noisy["bbox_base_frame"]["z_max"] == pytest.approx(0.17)
+        assert noisy["top_z"] == pytest.approx(clean["top_z"], abs=0.002)
+
+    async def test_top_is_the_99th_percentile(self, mock_ws_manager: Mock) -> None:
+        from pathlib import Path
+
+        z = np.load(Path(__file__).parent / "data" / "cube_1.npy")[:, 2]
+        result = await self._pose(mock_ws_manager, _cube_cache())
+        assert result["top_z"] == pytest.approx(float(np.percentile(z, 99)), abs=1e-4)
+        assert result["top_z"] <= result["bbox_base_frame"]["z_max"]
+
+
 async def test_non_finite_points_are_dropped(mock_ws_manager: Mock) -> None:
     bad = np.array([[np.nan, 0.0, 0.1], [0.9, np.inf, 0.1], [0.9, 0.0, -np.inf]])
     mcp = FastMCP("test-perception-grasp-nan")
