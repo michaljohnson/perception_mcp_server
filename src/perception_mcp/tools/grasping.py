@@ -14,8 +14,11 @@ from perception_mcp.utils.transforms import (
     TOP_DOWN_ORIENTATION,
     _PCA_ASPECT_RATIO_MIN,
     _grasp_xy,
+    _MAX_RANGE_M,
+    _MIN_KEPT_POINTS,
     _grasp_z,
     _oriented_topdown_quaternion,
+    _plausible,
     _principal_axis_angle_xy,
     _shortest_grasp_yaw,
     _tf_lookup,
@@ -23,6 +26,19 @@ from perception_mcp.utils.transforms import (
     _transform_points,
 )
 from perception_mcp.utils.websocket import WebSocketManager
+
+
+def _camera_stats(points) -> tuple[dict, dict]:
+    """Centroid and bounding box of the cloud in the camera frame."""
+    centroid = points.mean(axis=0)
+    pt_min = points.min(axis=0)
+    pt_max = points.max(axis=0)
+    size = pt_max - pt_min
+
+    def r(v) -> dict:
+        return {"x": round(float(v[0]), 4), "y": round(float(v[1]), 4), "z": round(float(v[2]), 4)}
+
+    return r(centroid), {"min": r(pt_min), "max": r(pt_max), "size": r(size)}
 
 
 def register_grasping_tools(
@@ -118,23 +134,7 @@ def register_grasping_tools(
                 "error": "Point cloud is empty — segmentation may have failed.",
             }
 
-        # Compute centroid and bounding box
-        centroid = points.mean(axis=0)
-        pt_min = points.min(axis=0)
-        pt_max = points.max(axis=0)
-        size = pt_max - pt_min
-
-        centroid_camera = {
-            "x": round(float(centroid[0]), 4),
-            "y": round(float(centroid[1]), 4),
-            "z": round(float(centroid[2]), 4),
-        }
-
-        bounding_box = {
-            "min": {"x": round(float(pt_min[0]), 4), "y": round(float(pt_min[1]), 4), "z": round(float(pt_min[2]), 4)},
-            "max": {"x": round(float(pt_max[0]), 4), "y": round(float(pt_max[1]), 4), "z": round(float(pt_max[2]), 4)},
-            "size": {"x": round(float(size[0]), 4), "y": round(float(size[1]), 4), "z": round(float(size[2]), 4)},
-        }
+        centroid_camera, bounding_box = _camera_stats(points)
 
         # TF lookup: camera frame → base_footprint.
         # Prefer the TF snapshot captured at segmentation time (so the
@@ -151,6 +151,19 @@ def register_grasping_tools(
                 translation, rotation = _tf_lookup(
                     ws_manager, source_frame=frame_id
                 )
+            points_base = _transform_points(points, translation, rotation)
+            keep = _plausible(points, points_base)
+            if keep.sum() < _MIN_KEPT_POINTS:
+                return {
+                    "object_name": object_name,
+                    "error": (
+                        f"only {int(keep.sum())} of {len(points)} points are plausible "
+                        f"(rest below the floor or > {_MAX_RANGE_M} m away): bad depth on this object"
+                    ),
+                }
+            dropped = int(len(points) - keep.sum())
+            points, points_base = points[keep], points_base[keep]
+            centroid_camera, bounding_box = _camera_stats(points)
             centroid_base = _transform_point(centroid_camera, translation, rotation)
 
             # 2D PCA on the base-frame xy projection of the point cloud
@@ -164,7 +177,6 @@ def register_grasping_tools(
             # the finger axis maps to base +X. To rotate the fingers
             # ACROSS the object's short axis, the gripper yaw therefore
             # equals the SHORT-axis angle = angle_long + pi/2.
-            points_base = _transform_points(points, translation, rotation)
 
             # Base-frame bounding box. Approach needs this for wide-surface
             # targets where the centroid sits inside the object volume and
@@ -224,6 +236,7 @@ def register_grasping_tools(
                 "bounding_box": bounding_box,
                 "bbox_base_frame": bbox_base,
                 "num_points": len(points),
+                "num_points_dropped": dropped,
                 "camera_frame_id": frame_id,
                 "gripper_offset_m": GRIPPER_FINGER_OFFSET_M,
                 "principal_axis_angle_rad": round(float(grasp_yaw), 4),

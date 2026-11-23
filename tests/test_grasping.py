@@ -227,3 +227,80 @@ class TestGraspXYFromRealCloud:
         assert result["grasp_xy_method"] == "near_face"
         # Hover test on the robot: 0.983. The centroid (old rule) was 0.972, 1.1 cm short.
         assert result["grasp_pose"]["position"]["x"] == pytest.approx(0.983, abs=0.005)
+
+
+def _cube_cache(extra: np.ndarray | None = None) -> Dict[str, Any]:
+    """The real cube cloud (base_footprint) as camera-frame points with identity rotation."""
+    from pathlib import Path
+
+    cam = np.array([0.4314, -0.1109, 0.679])
+    base = np.load(Path(__file__).parent / "data" / "cube_1.npy")
+    if extra is not None:
+        base = np.vstack([base, extra])
+    return {
+        "points": base - cam,
+        "colors": np.full((len(base), 3), 128, dtype=np.uint8),
+        "frame_id": "arm_camera_color_optical_frame",
+        "tf_translation": {"x": cam[0], "y": cam[1], "z": cam[2]},
+        "tf_rotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+    }
+
+
+def _junk(n: int) -> np.ndarray:
+    """Stray depth like the black bin's: below the floor and metres away."""
+    rng = np.random.default_rng(0)
+    below = np.column_stack([rng.uniform(0.8, 2.0, n // 2), rng.uniform(-1, 1, n // 2), rng.uniform(-15, -0.05, n // 2)])
+    far = np.column_stack([rng.uniform(7, 16, n - n // 2), rng.uniform(-6, 6, n - n // 2), rng.uniform(0, 0.4, n - n // 2)])
+    return np.vstack([below, far])
+
+
+class TestImplausiblePointsDropped:
+    """Points below the floor or far from the camera are dropped before the pose."""
+
+    async def _pose(self, ws: Mock, cache: Dict[str, Any]) -> Dict[str, Any]:
+        mcp = FastMCP("test-perception-grasp-junk")
+        register_grasping_tools(mcp, ws, cache)
+        return await _call(mcp, object_name="green cube")
+
+    async def test_junk_points_do_not_move_the_pose(self, mock_ws_manager: Mock) -> None:
+        clean = await self._pose(mock_ws_manager, _cube_cache())
+        noisy = await self._pose(mock_ws_manager, _cube_cache(_junk(500)))
+        assert noisy["num_points_dropped"] == 500
+        for axis in ("x", "y", "z"):
+            assert noisy["grasp_pose"]["position"][axis] == pytest.approx(
+                clean["grasp_pose"]["position"][axis], abs=0.002
+            )
+        assert noisy["bbox_base_frame"] == clean["bbox_base_frame"]
+
+    async def test_almost_all_junk_gives_an_error(self, mock_ws_manager: Mock) -> None:
+        cache = _cube_cache()
+        cache["points"] = np.vstack([cache["points"][:5], _junk(500) - np.array([0.4314, -0.1109, 0.679])])
+        result = await self._pose(mock_ws_manager, cache)
+        assert "error" in result
+        assert "plausible" in result["error"]
+
+    async def test_clean_cloud_drops_nothing(self, mock_ws_manager: Mock) -> None:
+        result = await self._pose(mock_ws_manager, _cube_cache())
+        assert result["num_points_dropped"] == 0
+
+    async def test_far_object_is_kept(self, mock_ws_manager: Mock) -> None:
+        # approach measures targets up to 4 m away.
+        cache = _cube_cache()
+        cache["points"] = cache["points"] + np.array([3.0, 0.0, 0.0])
+        result = await self._pose(mock_ws_manager, cache)
+        assert result["num_points_dropped"] == 0
+        assert result["grasp_pose"] is not None
+
+    async def test_floor_limit_is_minus_2_cm(self, mock_ws_manager: Mock) -> None:
+        near_floor = np.array([[0.9, 0.0, -0.01], [0.9, 0.0, -0.03]])
+        result = await self._pose(mock_ws_manager, _cube_cache(near_floor))
+        assert result["num_points_dropped"] == 1
+
+
+async def test_non_finite_points_are_dropped(mock_ws_manager: Mock) -> None:
+    bad = np.array([[np.nan, 0.0, 0.1], [0.9, np.inf, 0.1], [0.9, 0.0, -np.inf]])
+    mcp = FastMCP("test-perception-grasp-nan")
+    register_grasping_tools(mcp, mock_ws_manager, _cube_cache(bad))
+    result = await _call(mcp, object_name="green cube")
+    assert result["num_points_dropped"] == 3
+    assert all(np.isfinite(v) for v in result["grasp_pose"]["position"].values())
