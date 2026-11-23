@@ -171,6 +171,22 @@ def _principal_axis_angle_xy(points_base: np.ndarray) -> tuple[float, float]:
     return angle_long, aspect_ratio
 
 
+# Depth on dark or shiny surfaces gives stray points metres away or below the floor.
+_MIN_Z_M = -0.02
+# Above the approach skill's 4 m target range, far below the 16 m seen on a dark bin.
+_MAX_RANGE_M = 6.0
+_MIN_KEPT_POINTS = 10
+
+
+def _plausible(points_cam: np.ndarray, points_base: np.ndarray) -> np.ndarray:
+    """Mask of points that can be real: finite, above the floor, within range of the camera."""
+    return (
+        np.isfinite(points_base).all(axis=1)
+        & (points_base[:, 2] >= _MIN_Z_M)
+        & (np.linalg.norm(points_cam, axis=1) <= _MAX_RANGE_M)
+    )
+
+
 # Below this horizontal camera-object distance the camera looks down on the
 # object and sees its whole top, so the trimmed bbox middle is used instead.
 _NEAR_FACE_MIN_VIEW_DIST_M = 0.10
