@@ -412,14 +412,21 @@ def _column(height: float, n: int = 400) -> np.ndarray:
 
 
 class TestGraspZ:
-    """Tests for ``_grasp_z`` (pad middle at the centroid, below the top, above the support)."""
+    """Tests for ``_grasp_z`` (as deep as allowed: above the support, pads below the top)."""
 
-    def test_short_object_uses_centroid(self) -> None:
-        cloud = _column(0.10)
+    def test_short_object_gripped_at_its_bottom(self) -> None:
+        cloud = _column(0.07)
         grasp_z, pre_z, method = _grasp_z(cloud)
-        assert method == "centroid"
-        assert grasp_z == pytest.approx(cloud[:, 2].mean() + 0.188, abs=1e-6)
+        assert method == "above_support"
+        assert grasp_z - 0.225 == pytest.approx(np.percentile(cloud[:, 2], 1) - 0.005, abs=1e-6)
         assert pre_z == pytest.approx(np.percentile(cloud[:, 2], 99) + 0.225 + 0.10, abs=1e-6)
+
+    def test_real_cube_held_low(self) -> None:
+        # The cube's cloud is mostly its top; the fingertips still go to its lowest seen points.
+        cloud = np.load(DATA / "cube_1.npy")
+        grasp_z, _, method = _grasp_z(cloud)
+        assert method == "above_support"
+        assert grasp_z - 0.225 == pytest.approx(np.percentile(cloud[:, 2], 1) - 0.005, abs=1e-6)
 
     def test_tall_object_pads_at_most_5_cm_below_the_top(self) -> None:
         cloud = _column(0.245)
