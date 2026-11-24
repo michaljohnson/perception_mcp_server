@@ -76,12 +76,7 @@ class TestGraspFromCachedCloud:
         mcp, _ws, _cache = grasping_server
         result = await _call(mcp, object_name="red cup")
         assert result["gripper_offset_m"] == pytest.approx(GRIPPER_FINGER_OFFSET_M)
-        assert result["grasp_z_method"] in ("centroid", "below_top", "above_support")
-        if result["grasp_z_method"] == "centroid":
-            expected_z = result["centroid_base_frame"]["z"] + GRIPPER_FINGER_OFFSET_M
-            assert result["grasp_pose"]["position"]["z"] == pytest.approx(
-                round(expected_z, 4), abs=1e-4
-            )
+        assert result["grasp_z_method"] in ("below_top", "above_support")
         assert result["pre_grasp_pose"]["position"]["z"] >= result["grasp_pose"]["position"]["z"]
 
     async def test_num_points_matches_cache_size(

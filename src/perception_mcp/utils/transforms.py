@@ -236,24 +236,21 @@ _PRE_GRASP_CLEARANCE_M = 0.10
 def _grasp_z(points_base: np.ndarray) -> tuple[float, float, str]:
     """Flange z for the grasp and the pre-grasp from the object's height.
 
-    The pad middle goes to the centroid height, but no lower than
-    ``_MAX_ABOVE_PADS_M`` below the object's top, so a tall object does not
-    run into the palm, and never so low that the fingertips go more than
-    ``_BELOW_LOWEST_SEEN_M`` below the object's lowest seen points. Top and
+    As deep as allowed: the fingertips ``_BELOW_LOWEST_SEEN_M`` below the
+    object's lowest seen points, unless that puts the object's top more than
+    ``_MAX_ABOVE_PADS_M`` above the pad middle (a tall object would run into
+    the palm). The centroid is not used: the camera sees mostly the top, so it
+    sits high and short objects end up held by their upper half. Top and
     bottom are the 99th and 1st z percentiles.
 
-    Returns ``(grasp_z, pre_grasp_z, method)`` with method ``"centroid"``,
-    ``"below_top"`` or ``"above_support"``.
+    Returns ``(grasp_z, pre_grasp_z, method)`` with method ``"above_support"``
+    or ``"below_top"``.
     """
     z = points_base[:, 2]
     bottom, top = np.percentile(z, [1, 99])
-    pad_z, method = float(z.mean()), "centroid"
-    if pad_z < top - _MAX_ABOVE_PADS_M:
-        pad_z, method = float(top - _MAX_ABOVE_PADS_M), "below_top"
-    grasp_z = pad_z + GRIPPER_FINGER_OFFSET_M
     lowest = float(bottom) - _BELOW_LOWEST_SEEN_M + _FINGERTIP_OFFSET_M
-    if grasp_z < lowest:
-        grasp_z, method = lowest, "above_support"
+    below_top = float(top) - _MAX_ABOVE_PADS_M + GRIPPER_FINGER_OFFSET_M
+    grasp_z, method = max((lowest, "above_support"), (below_top, "below_top"))
     pre_grasp_z = max(grasp_z, float(top) + _FINGERTIP_OFFSET_M + _PRE_GRASP_CLEARANCE_M)
     return grasp_z, pre_grasp_z, method
 
