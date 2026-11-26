@@ -418,7 +418,7 @@ class TestGraspZ:
         cloud = _column(0.07)
         grasp_z, pre_z, method = _grasp_z(cloud)
         assert method == "above_support"
-        assert grasp_z - 0.225 == pytest.approx(np.percentile(cloud[:, 2], 1) - 0.005, abs=1e-6)
+        assert grasp_z - 0.225 == pytest.approx(np.percentile(cloud[:, 2], 1) + 0.01, abs=1e-6)
         assert pre_z == pytest.approx(np.percentile(cloud[:, 2], 99) + 0.225 + 0.10, abs=1e-6)
 
     def test_real_cube_held_low(self) -> None:
@@ -426,7 +426,15 @@ class TestGraspZ:
         cloud = np.load(DATA / "cube_1.npy")
         grasp_z, _, method = _grasp_z(cloud)
         assert method == "above_support"
-        assert grasp_z - 0.225 == pytest.approx(np.percentile(cloud[:, 2], 1) - 0.005, abs=1e-6)
+        assert grasp_z - 0.225 == pytest.approx(np.percentile(cloud[:, 2], 1) + 0.01, abs=1e-6)
+
+    def test_fingertips_stay_above_the_floor_when_the_bottom_edge_is_seen(self) -> None:
+        # The camera saw down to the floor (z 0): the fingertips must not go into it.
+        cloud = np.stack([np.full(400, 1.0), np.zeros(400), np.linspace(0.0, 0.065, 400)], axis=1)
+        grasp_z, _, method = _grasp_z(cloud)
+        assert method == "above_support"
+        assert grasp_z - 0.225 == pytest.approx(np.percentile(cloud[:, 2], 1) + 0.01, abs=1e-6)
+        assert grasp_z - 0.225 >= 0.01
 
     def test_tall_object_pads_at_most_5_cm_below_the_top(self) -> None:
         cloud = _column(0.245)
@@ -438,7 +446,7 @@ class TestGraspZ:
         cloud = _column(0.02)
         grasp_z, _, method = _grasp_z(cloud)
         assert method == "above_support"
-        assert grasp_z - 0.225 == pytest.approx(np.percentile(cloud[:, 2], 1) - 0.005, abs=1e-6)
+        assert grasp_z - 0.225 == pytest.approx(np.percentile(cloud[:, 2], 1) + 0.01, abs=1e-6)
 
     # 24 cm bottle: grasped on the robot at flange 0.37 (6.3 cm above the pads, no palm
     # contact); the centroid rule gave 0.3227 (11 cm above the pads, into the palm).

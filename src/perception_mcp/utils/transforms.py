@@ -223,12 +223,12 @@ def _grasp_xy(points_base: np.ndarray, camera_xy: tuple[float, float]) -> tuple[
 # How far an object may stick up above the finger pads without touching the
 # gripper's palm (measured: more than 6 cm, kept with a margin).
 _MAX_ABOVE_PADS_M = 0.05
-# Wrist flange to fingertips of the Robotiq 2F-140, measured. The pad offset
-# above uses 0.22; the larger value here keeps the fingertips higher.
+# Wrist flange to fingertips of the Robotiq 2F-140, measured (the pad middle is
+# GRIPPER_FINGER_OFFSET_M below the flange).
 _FINGERTIP_OFFSET_M = 0.225
-# The lowest seen points sit 1-2 cm above the support (the camera rarely sees
-# an object's bottom edge); the fingertips may go this far below them.
-_BELOW_LOWEST_SEEN_M = 0.005
+# The fingertips stay this far above the object's lowest seen points, which sit at
+# or 1-2 cm above the support: never into the floor or the surface under the object.
+_ABOVE_LOWEST_SEEN_M = 0.01
 # Fingertips this far above the object's top for the pre-grasp.
 _PRE_GRASP_CLEARANCE_M = 0.10
 
@@ -236,7 +236,7 @@ _PRE_GRASP_CLEARANCE_M = 0.10
 def _grasp_z(points_base: np.ndarray) -> tuple[float, float, str]:
     """Flange z for the grasp and the pre-grasp from the object's height.
 
-    As deep as allowed: the fingertips ``_BELOW_LOWEST_SEEN_M`` below the
+    As deep as allowed: the fingertips ``_ABOVE_LOWEST_SEEN_M`` above the
     object's lowest seen points, unless that puts the object's top more than
     ``_MAX_ABOVE_PADS_M`` above the pad middle (a tall object would run into
     the palm). The centroid is not used: the camera sees mostly the top, so it
@@ -248,7 +248,7 @@ def _grasp_z(points_base: np.ndarray) -> tuple[float, float, str]:
     """
     z = points_base[:, 2]
     bottom, top = np.percentile(z, [1, 99])
-    lowest = float(bottom) - _BELOW_LOWEST_SEEN_M + _FINGERTIP_OFFSET_M
+    lowest = float(bottom) + _ABOVE_LOWEST_SEEN_M + _FINGERTIP_OFFSET_M
     below_top = float(top) - _MAX_ABOVE_PADS_M + GRIPPER_FINGER_OFFSET_M
     grasp_z, method = max((lowest, "above_support"), (below_top, "below_top"))
     pre_grasp_z = max(grasp_z, float(top) + _FINGERTIP_OFFSET_M + _PRE_GRASP_CLEARANCE_M)
